@@ -2,6 +2,7 @@ import './styles.css';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { USDLoader } from 'three/examples/jsm/loaders/USDLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const canvas = document.getElementById('stage');
@@ -296,48 +297,55 @@ function renderFrame(activeRenderer = renderer, activeTarget = renderTarget, res
   activeRenderer.render(postScene, postCamera);
 }
 
-function loadModelFile(file) {
+async function loadModelFile(file) {
   if (!file) return;
 
   const name = file.name || 'model';
   const lower = name.toLowerCase();
   const isOBJ = lower.endsWith('.obj');
   const isSTL = lower.endsWith('.stl');
+  const isUSD = lower.endsWith('.usdz') || lower.endsWith('.usd') || lower.endsWith('.usda') || lower.endsWith('.usdc');
 
-  if (!isOBJ && !isSTL) {
-    status.textContent = 'Please upload a .OBJ or .STL file.';
+  if (!isOBJ && !isSTL && !isUSD) {
+    status.textContent = 'Please upload a .OBJ, .STL, .USD, .USDA, .USDC, or .USDZ file.';
     return;
   }
 
   status.textContent = `Loading ${name}…`;
-  const reader = new FileReader();
 
-  reader.onload = () => {
-    try {
-      let parsed;
+  try {
+    let parsed;
 
-      if (isOBJ) {
-        parsed = new OBJLoader().parse(String(reader.result));
-      } else {
-        const geometry = new STLLoader().parse(reader.result);
-        parsed = new THREE.Group();
-        parsed.add(new THREE.Mesh(geometry, cleanMaterial));
+    if (isOBJ) {
+      const text = await file.text();
+      parsed = new OBJLoader().parse(text);
+    } else if (isSTL) {
+      const buffer = await file.arrayBuffer();
+      const geometry = new STLLoader().parse(buffer);
+      parsed = new THREE.Group();
+      parsed.add(new THREE.Mesh(geometry, cleanMaterial));
+    } else {
+      // USDLoader works from URLs, so create a short-lived blob URL for local uploads.
+      const url = URL.createObjectURL(file);
+      try {
+        parsed = await new USDLoader().loadAsync(url);
+      } finally {
+        URL.revokeObjectURL(url);
       }
-
-      useObject(parsed);
-      status.textContent = `Loaded ${name}.`;
-    } catch (error) {
-      console.error(error);
-      status.textContent = isOBJ
-        ? 'Could not parse that OBJ. Try a triangulated / standard OBJ export.'
-        : 'Could not parse that STL. Try exporting as binary or ASCII STL.';
     }
-  };
 
-  reader.onerror = () => { status.textContent = `Could not read ${name}.`; };
-
-  if (isOBJ) reader.readAsText(file);
-  else reader.readAsArrayBuffer(file);
+    useObject(parsed);
+    status.textContent = `Loaded ${name}.`;
+  } catch (error) {
+    console.error(error);
+    if (isOBJ) {
+      status.textContent = 'Could not parse that OBJ. Try a triangulated / standard OBJ export.';
+    } else if (isSTL) {
+      status.textContent = 'Could not parse that STL. Try exporting as binary or ASCII STL.';
+    } else {
+      status.textContent = 'Could not parse that USD/USDZ. Try a simple mesh-only USDZ export, or convert to OBJ/STL if it uses unsupported USD features.';
+    }
+  }
 }
 
 function loadDemoMesh() {
@@ -347,7 +355,7 @@ function loadDemoMesh() {
   core.scale.setScalar(0.72);
   group.add(main, core);
   useObject(group);
-  status.textContent = 'Using built-in demo mesh. Drag a .OBJ or .STL anywhere to replace it.';
+  status.textContent = 'Using built-in demo mesh. Drag a .OBJ, .STL, or .USDZ anywhere to replace it.';
 }
 
 function useObject(object) {
@@ -454,7 +462,7 @@ function exportPNG() {
     if (blob) {
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'obj-bayer-dither.png';
+      link.download = 'model-bayer-dither.png';
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     }
