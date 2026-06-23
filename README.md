@@ -1,6 +1,6 @@
-# OBJ/STL/USDZ Bayer Dither Lens Demo
+# 3D Bayer Dither Lens Demo
 
-A lightweight Vite + Three.js demo that loads a user-provided `.obj`, `.stl`, or `.usdz` file, renders it into a realtime Bayer ordered-dither post shader, and uses a circular hover lens to reveal the clean underlying 3D model.
+A lightweight Vite + Three.js demo that loads a user-provided `.obj`, `.stl`, `.usd`, `.usda`, `.usdc`, or `.usdz` file, renders it into a realtime Bayer ordered-dither post shader, and uses a circular hover lens to reveal the clean underlying 3D model.
 
 ## Local development
 
@@ -24,26 +24,17 @@ Push this folder to GitHub, then import the repository in Vercel. The included `
 - Output directory: `dist`
 - Framework: `vite`
 
+## Important fixes in this build
+
+- Imported models are centered correctly before scaling. The previous transform could place off-origin OBJ files outside the camera view.
+- Materials from uploaded files are ignored and replaced with a neutral internal material, so missing `.mtl` files or black source materials will not make the dither disappear.
+- Vertex normals are recomputed for imported meshes to avoid flat black shading from missing or inconsistent normals.
+- OBJ, STL, USD, USDA, USDC, and USDZ are accepted. USD/USDZ support is best-effort because complex USDZ exports may contain unsupported features.
+
 ## Performance notes
 
 - No React or UI framework.
 - No heavy postprocessing library.
 - Single render target + one fullscreen shader pass.
 - Device pixel ratio is capped by a UI slider to avoid over-rendering on retina screens.
-- OBJ/STL/USD parsing happens only on upload; per-frame work is limited to model rotation/hover, one scene render, and one shader pass.
-
-
-## Upload troubleshooting
-
-Uploaded models are normalized to the camera and all mesh normals are recomputed on load. This avoids a common issue where exported OBJ/STL files render as a black silhouette because their normals are missing, inverted, or incompatible with the lighting setup.
-
-Supported user uploads:
-
-- `.obj` via `OBJLoader`
-- `.stl` via `STLLoader` — binary or ASCII STL
-- `.usd`, `.usda`, `.usdc`, and `.usdz` via Three.js `USDLoader`
-
-
-## USDZ notes
-
-USD/USDZ support uses Three.js `USDLoader`. It is best for relatively simple mesh-based USDZ assets. Some complex USD features, animation setups, composition arcs, or unusual texture/material structures may not load the same way they do in Apple AR Quick Look. If a USDZ fails, try exporting a simpler mesh-only USDZ or convert to OBJ/STL for this dither effect.
+- Model parsing happens only on upload; per-frame work is limited to model rotation/hover, one scene render, and one shader pass.

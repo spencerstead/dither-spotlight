@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#1e2741" />
-    <title>OBJ/STL/USDZ Bayer Dither Lens</title>
+    <title>3D Bayer Dither Lens</title>
   </head>
   <body>
-    <canvas id="stage" aria-label="Realtime OBJ/STL/USDZ Bayer dither render"></canvas>
+    <canvas id="stage" aria-label="Realtime 3D Bayer dither render"></canvas>
 
     <aside class="hud" aria-label="3D dither controls">
-      <h1>OBJ/STL/USDZ Dither Lens</h1>
-      <p>Upload or drop a <strong>.obj</strong>, <strong>.stl</strong>, or <strong>.usdz</strong> file. The model is rendered once, then a lightweight Bayer post shader turns it into a realtime dither field. Hover the cursor lens to reveal the clean 3D model underneath.</p>
+      <h1>3D Dither Lens</h1>
+      <p>Upload or drop an <strong>OBJ, STL, USD, USDA, USDC, or USDZ</strong> file. The model is rendered once, then a lightweight Bayer post shader turns it into a realtime dither field. Hover the cursor lens to reveal the clean 3D model underneath.</p>
 
       <div class="grid">
         <label>Bayer scale <output id="pixelOut">8px</output><input id="pixelSize" type="range" min="2" max="28" step="1" value="8"></label>
@@ -30,18 +30,18 @@
       </div>
 
       <div class="row">
-        <label class="file" for="objFile">Upload OBJ/STL/USDZ</label>
+        <label class="file" for="objFile">Upload 3D File</label>
         <input id="objFile" type="file" accept=".obj,.stl,.usd,.usda,.usdc,.usdz,text/plain,model/stl,application/sla,model/vnd.usdz+zip,model/vnd.pixar.usd">
         <button id="invert" type="button">Invert</button>
         <button id="reset" type="button">Demo mesh</button>
         <button id="exportPng" type="button">Export PNG</button>
       </div>
 
-      <div class="status" id="status">Using built-in demo mesh. Drag a .OBJ, .STL, or .USDZ anywhere to replace it.</div>
+      <div class="status" id="status">Using built-in demo mesh. Drag OBJ, STL, USD, USDA, USDC, or USDZ anywhere to replace it.</div>
     </aside>
 
-    <div class="hint">Vite · Three.js · OBJ/STL/USD loaders · Bayer post shader</div>
-    <div class="drop" id="drop">Drop OBJ/STL/USDZ to load</div>
+    <div class="hint">Vite · Three.js · OBJ/STL/USD · Bayer post shader</div>
+    <div class="drop" id="drop">Drop 3D file to load</div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

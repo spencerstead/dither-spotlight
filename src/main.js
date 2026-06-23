@@ -5,25 +5,29 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { USDLoader } from 'three/examples/jsm/loaders/USDLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-const canvas = document.getElementById('stage');
-const status = document.getElementById('status');
-const drop = document.getElementById('drop');
+const $ = (id) => document.getElementById(id);
+const canvas = $('stage');
+const status = $('status');
+const drop = $('drop');
 
 const ui = {
-  pixelSize: document.getElementById('pixelSize'), pixelOut: document.getElementById('pixelOut'),
-  contrast: document.getElementById('contrast'), contrastOut: document.getElementById('contrastOut'),
-  lens: document.getElementById('lens'), lensOut: document.getElementById('lensOut'),
-  softness: document.getElementById('softness'), softOut: document.getElementById('softOut'),
-  rotation: document.getElementById('rotation'), rotOut: document.getElementById('rotOut'),
-  hover: document.getElementById('hover'), hoverOut: document.getElementById('hoverOut'),
-  light: document.getElementById('light'), lightOut: document.getElementById('lightOut'),
-  dpr: document.getElementById('dpr'), dprOut: document.getElementById('dprOut'),
-  fg: document.getElementById('fg'), bg: document.getElementById('bg'), objFile: document.getElementById('objFile'),
-  invert: document.getElementById('invert'), reset: document.getElementById('reset'), exportPng: document.getElementById('exportPng'),
+  pixelSize: $('pixelSize'), pixelOut: $('pixelOut'),
+  contrast: $('contrast'), contrastOut: $('contrastOut'),
+  lens: $('lens'), lensOut: $('lensOut'),
+  softness: $('softness'), softOut: $('softOut'),
+  rotation: $('rotation'), rotOut: $('rotOut'),
+  hover: $('hover'), hoverOut: $('hoverOut'),
+  light: $('light'), lightOut: $('lightOut'),
+  dpr: $('dpr'), dprOut: $('dprOut'),
+  fg: $('fg'), bg: $('bg'), objFile: $('objFile'),
+  invert: $('invert'), reset: $('reset'), exportPng: $('exportPng'),
 };
 
+const SUPPORTED_EXTENSIONS = new Set(['obj', 'stl', 'usd', 'usda', 'usdc', 'usdz']);
+const TARGET_SIZE = 2.45;
 const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const mouse = new THREE.Vector2(-9999, -9999);
+
 let mouseActive = 0;
 let currentRoot = null;
 let lastTime = 0;
@@ -33,7 +37,7 @@ let canvasCssH = 1;
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: false,
-  alpha: true,
+  alpha: false,
   powerPreference: 'high-performance',
   preserveDrawingBuffer: false,
 });
@@ -41,33 +45,33 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setClearColor(0x000000, 1);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 500);
 camera.position.set(0, 0.18, 5.2);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
-controls.minDistance = 2.8;
-controls.maxDistance = 9;
+controls.minDistance = 2.3;
+controls.maxDistance = 9.5;
 
 const rig = new THREE.Group();
 scene.add(rig);
 
 const ambient = new THREE.AmbientLight(0xffffff, 1.05);
-const hemi = new THREE.HemisphereLight(0xffffff, 0x46506f, 0.8);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x1b2035, 0.82);
 const key = new THREE.DirectionalLight(0xffffff, 1.55);
 key.position.set(3.5, 4.2, 4);
-const rim = new THREE.DirectionalLight(0xa8c7ff, 0.7);
+const rim = new THREE.DirectionalLight(0xa8c7ff, 0.85);
 rim.position.set(-4, 1.8, -2.6);
 scene.add(ambient, hemi, key, rim);
 
-const cleanMaterial = new THREE.MeshStandardMaterial({
-  color: new THREE.Color(ui.fg.value),
-  roughness: 0.58,
+const modelMaterial = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  emissive: 0xffffff,
+  emissiveIntensity: 0.055,
+  roughness: 0.62,
   metalness: 0.02,
-  emissive: new THREE.Color(ui.fg.value),
-  emissiveIntensity: 0.18,
   side: THREE.DoubleSide,
 });
 
@@ -85,6 +89,7 @@ renderTarget.texture.magFilter = THREE.LinearFilter;
 const bayerTexture = makeBayerTexture();
 const postScene = new THREE.Scene();
 const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
 const postMaterial = new THREE.ShaderMaterial({
   uniforms: {
     tScene: { value: renderTarget.texture },
@@ -110,6 +115,7 @@ const postMaterial = new THREE.ShaderMaterial({
   `,
   fragmentShader: `
     precision highp float;
+
     uniform sampler2D tScene;
     uniform sampler2D tBayer;
     uniform vec2 uResolution;
@@ -139,23 +145,25 @@ const postMaterial = new THREE.ShaderMaterial({
       vec2 matrixUv = (mod(floor(frag / px), 8.0) + 0.5) / 8.0;
       float threshold = texture2D(tBayer, matrixUv).r;
 
-      float shade = luminance(cleanCell.rgb) * cleanCell.a;
-      shade = clamp((shade - 0.02) * uContrast, 0.0, 1.0);
-      float dither = step(threshold, shade);
+      float mask = step(0.01, cleanCell.a);
+      float shade = clamp((luminance(cleanCell.rgb) - 0.02) * uContrast, 0.0, 1.0);
+      float dither = step(threshold, shade) * mask;
 
-      vec3 dithered = mix(uBg, uFg, dither * step(0.01, cleanCell.a));
-      vec3 clean = mix(uBg, cleanFull.rgb, cleanFull.a);
+      vec3 dithered = mix(uBg, uFg, dither);
 
-      float distToMouse = distance(frag, uMouse);
+      float cleanMask = step(0.01, cleanFull.a);
+      float cleanShade = clamp(luminance(cleanFull.rgb) * 1.08 + 0.035, 0.0, 1.0);
+      vec3 clean = mix(uBg, uFg * cleanShade, cleanMask);
+
+      float d = distance(frag, uMouse);
       float softness = max(1.0, uLensSoftness);
-      float lens = (1.0 - smoothstep(uLensRadius - softness, uLensRadius, distToMouse)) * uLensActive;
+      float lens = (1.0 - smoothstep(uLensRadius - softness, uLensRadius, d)) * uLensActive;
 
-      // Clean model reveal inside the lens. Dither outside.
       vec3 color = mix(dithered, clean, lens);
 
-      // Thin optical edge only; it does not dim the lens interior.
-      float ring = smoothstep(uLensRadius + 1.5, uLensRadius, distToMouse) - smoothstep(uLensRadius, uLensRadius - 1.5, distToMouse);
-      color += ring * vec3(0.08) * uLensActive;
+      float ring = smoothstep(uLensRadius + 1.2, uLensRadius, d)
+        - smoothstep(uLensRadius, uLensRadius - 1.2, d);
+      color += ring * vec3(0.075) * uLensActive;
 
       gl_FragColor = vec4(color, 1.0);
     }
@@ -169,6 +177,7 @@ function init() {
   loadDemoMesh();
   updateUi();
   resize();
+
   addEventListener('resize', resize, { passive: true });
   addEventListener('pointermove', setPointer, { passive: true });
   addEventListener('pointerenter', setPointer, { passive: true });
@@ -212,6 +221,7 @@ function makeBayerTexture() {
     10, 58, 6, 54, 9, 57, 5, 53,
     42, 26, 38, 22, 41, 25, 37, 21,
   ].map((value) => Math.round(((value + 0.5) / 64) * 255)));
+
   const texture = new THREE.DataTexture(bayer, 8, 8, THREE.RedFormat, THREE.UnsignedByteType);
   texture.minFilter = THREE.NearestFilter;
   texture.magFilter = THREE.NearestFilter;
@@ -231,28 +241,32 @@ function setPointer(event) {
 function resize() {
   canvasCssW = Math.max(1, window.innerWidth);
   canvasCssH = Math.max(1, window.innerHeight);
+
   const dpr = Math.min(window.devicePixelRatio || 1, Number(ui.dpr.value));
   renderer.setPixelRatio(dpr);
   renderer.setSize(canvasCssW, canvasCssH, false);
-  const width = Math.floor(canvasCssW * dpr);
-  const height = Math.floor(canvasCssH * dpr);
+
+  const width = Math.max(1, Math.floor(canvasCssW * dpr));
+  const height = Math.max(1, Math.floor(canvasCssH * dpr));
   renderTarget.setSize(width, height);
+
   camera.aspect = canvasCssW / canvasCssH;
   camera.updateProjectionMatrix();
   postMaterial.uniforms.uResolution.value.set(width, height);
+  updateUi();
 }
 
 function updateUi() {
   const fg = new THREE.Color(ui.fg.value);
   const bg = new THREE.Color(ui.bg.value);
+
   postMaterial.uniforms.uPixelSize.value = Number(ui.pixelSize.value);
   postMaterial.uniforms.uLensRadius.value = Number(ui.lens.value) * renderer.getPixelRatio();
   postMaterial.uniforms.uLensSoftness.value = Number(ui.softness.value) * renderer.getPixelRatio();
   postMaterial.uniforms.uContrast.value = Number(ui.contrast.value) / 100;
   postMaterial.uniforms.uFg.value.copy(fg);
   postMaterial.uniforms.uBg.value.copy(bg);
-  cleanMaterial.color.copy(fg);
-  cleanMaterial.emissive.copy(fg);
+
   key.intensity = Number(ui.light.value) / 100;
   document.documentElement.style.setProperty('--accent', ui.fg.value);
   document.body.style.background = ui.bg.value;
@@ -276,6 +290,7 @@ function animate(time) {
 
   const rotationSpeed = prefersReducedMotion ? 0 : Number(ui.rotation.value) / 100;
   const hoverAmount = prefersReducedMotion ? 0 : Number(ui.hover.value) / 100;
+
   rig.rotation.y += dt * rotationSpeed;
   rig.rotation.x = Math.sin(time * 0.00028) * 0.08;
   rig.position.y = Math.sin(time * 0.00115) * hoverAmount;
@@ -300,62 +315,67 @@ function renderFrame(activeRenderer = renderer, activeTarget = renderTarget, res
 async function loadModelFile(file) {
   if (!file) return;
 
-  const name = file.name || 'model';
-  const lower = name.toLowerCase();
-  const isOBJ = lower.endsWith('.obj');
-  const isSTL = lower.endsWith('.stl');
-  const isUSD = lower.endsWith('.usdz') || lower.endsWith('.usd') || lower.endsWith('.usda') || lower.endsWith('.usdc');
-
-  if (!isOBJ && !isSTL && !isUSD) {
-    status.textContent = 'Please upload a .OBJ, .STL, .USD, .USDA, .USDC, or .USDZ file.';
+  const ext = getExtension(file.name);
+  if (!SUPPORTED_EXTENSIONS.has(ext)) {
+    status.textContent = 'Please upload OBJ, STL, USD, USDA, USDC, or USDZ.';
     return;
   }
 
-  status.textContent = `Loading ${name}…`;
+  status.textContent = `Loading ${file.name}…`;
 
   try {
-    let parsed;
+    let model;
 
-    if (isOBJ) {
+    if (ext === 'obj') {
       const text = await file.text();
-      parsed = new OBJLoader().parse(text);
-    } else if (isSTL) {
+      model = new OBJLoader().parse(stripUnsupportedOBJReferences(text));
+    } else if (ext === 'stl') {
       const buffer = await file.arrayBuffer();
       const geometry = new STLLoader().parse(buffer);
-      parsed = new THREE.Group();
-      parsed.add(new THREE.Mesh(geometry, cleanMaterial));
+      model = new THREE.Mesh(geometry, modelMaterial);
     } else {
-      // USDLoader works from URLs, so create a short-lived blob URL for local uploads.
-      const url = URL.createObjectURL(file);
-      try {
-        parsed = await new USDLoader().loadAsync(url);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      model = await loadUSDLikeFile(file);
     }
 
-    useObject(parsed);
-    status.textContent = `Loaded ${name}.`;
+    const stats = useObject(model);
+    status.textContent = `Loaded ${file.name}. ${stats.meshes} mesh${stats.meshes === 1 ? '' : 'es'}, ${stats.vertices.toLocaleString()} vertices.`;
   } catch (error) {
     console.error(error);
-    if (isOBJ) {
-      status.textContent = 'Could not parse that OBJ. Try a triangulated / standard OBJ export.';
-    } else if (isSTL) {
-      status.textContent = 'Could not parse that STL. Try exporting as binary or ASCII STL.';
-    } else {
-      status.textContent = 'Could not parse that USD/USDZ. Try a simple mesh-only USDZ export, or convert to OBJ/STL if it uses unsupported USD features.';
-    }
+    status.textContent = `Could not load ${file.name}. If it is a complex USDZ, try exporting OBJ, STL, or glTF first.`;
+  } finally {
+    ui.objFile.value = '';
+  }
+}
+
+function getExtension(name = '') {
+  return name.split('.').pop()?.toLowerCase() || '';
+}
+
+function stripUnsupportedOBJReferences(text) {
+  return String(text)
+    .split('\n')
+    .filter((line) => !line.trim().toLowerCase().startsWith('mtllib '))
+    .join('\n');
+}
+
+async function loadUSDLikeFile(file) {
+  const loader = new USDLoader();
+  const url = URL.createObjectURL(file);
+  try {
+    return await loader.loadAsync(url);
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
 function loadDemoMesh() {
   const group = new THREE.Group();
-  const main = new THREE.Mesh(new THREE.TorusKnotGeometry(0.82, 0.22, 176, 18), cleanMaterial);
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 2), cleanMaterial);
+  const main = new THREE.Mesh(new THREE.TorusKnotGeometry(0.82, 0.22, 176, 18), modelMaterial);
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 2), modelMaterial);
   core.scale.setScalar(0.72);
   group.add(main, core);
   useObject(group);
-  status.textContent = 'Using built-in demo mesh. Drag a .OBJ, .STL, or .USDZ anywhere to replace it.';
+  status.textContent = 'Using built-in demo mesh. Drag an OBJ, STL, USD, USDA, USDC, or USDZ anywhere to replace it.';
 }
 
 function useObject(object) {
@@ -364,36 +384,62 @@ function useObject(object) {
     disposeObject(currentRoot);
   }
 
+  rig.rotation.set(0, 0, 0);
+  rig.position.set(0, 0, 0);
+
+  let meshes = 0;
+  let vertices = 0;
+
   object.traverse((child) => {
     if (!child.isMesh) return;
+    meshes += 1;
 
-    child.material = cleanMaterial;
+    const geometry = child.geometry;
+    if (geometry?.isBufferGeometry && geometry.attributes?.position) {
+      vertices += geometry.attributes.position.count;
+      geometry.deleteAttribute('normal');
+      geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+    }
+
+    child.material = modelMaterial;
     child.castShadow = false;
     child.receiveShadow = false;
-
-    if (child.geometry) {
-      // Imported OBJ/STL normals are often missing, inverted, or authored for a different
-      // shading setup. Recompute them so uploaded files do not render as a black silhouette.
-      if (child.geometry.attributes.normal) child.geometry.deleteAttribute('normal');
-      child.geometry.computeVertexNormals();
-      child.geometry.computeBoundingBox();
-      child.geometry.computeBoundingSphere();
-    }
+    child.frustumCulled = false;
   });
 
-  fitToView(object);
-  currentRoot = object;
+  if (!meshes) throw new Error('No mesh geometry found in file.');
+
+  currentRoot = centerAndScaleObject(object);
   rig.add(currentRoot);
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  return { meshes, vertices };
 }
 
-function fitToView(object) {
+function centerAndScaleObject(object) {
   object.updateMatrixWorld(true);
+
   const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) throw new Error('Loaded object has empty bounds.');
+
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const scale = TARGET_SIZE / maxDim;
+
+  // Center first, then scale in a parent container.
+  // This fixes off-origin OBJs like Brain.obj: S*(v - center), not S*v - center.
   object.position.sub(center);
-  object.scale.setScalar(2.35 / maxDim);
+
+  const container = new THREE.Group();
+  container.add(object);
+  container.scale.setScalar(scale);
+  container.updateMatrixWorld(true);
+
+  return container;
 }
 
 function disposeObject(object) {
@@ -451,18 +497,19 @@ function exportPNG() {
   const outCtx = out.getContext('2d');
   const imageData = outCtx.createImageData(exportW, exportH);
   const row = exportW * 4;
+
   for (let y = 0; y < exportH; y++) {
     const src = (exportH - 1 - y) * row;
     const dst = y * row;
     imageData.data.set(pixels.subarray(src, src + row), dst);
   }
-  outCtx.putImageData(imageData, 0, 0);
 
+  outCtx.putImageData(imageData, 0, 0);
   out.toBlob((blob) => {
     if (blob) {
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'model-bayer-dither.png';
+      link.download = '3d-bayer-dither.png';
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     }
@@ -475,5 +522,6 @@ function exportPNG() {
     postMaterial.uniforms.uLensSoftness.value = prevLensSoftness;
     mouse.copy(prevMouse);
     ui.exportPng.disabled = false;
+    updateUi();
   }, 'image/png');
 }
