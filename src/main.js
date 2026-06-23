@@ -1,5 +1,6 @@
 import './styles.css';
 import * as THREE from 'three';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const canvas = document.getElementById('stage');
@@ -19,7 +20,6 @@ const ui = {
   invert: document.getElementById('invert'), reset: document.getElementById('reset'), exportPng: document.getElementById('exportPng'),
 };
 
-const SUPPORTED_EXTENSIONS = new Set(['obj', 'stl', 'usd', 'usda', 'usdc', 'usdz']);
 const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const mouse = new THREE.Vector2(-9999, -9999);
 let mouseActive = 0;
@@ -37,39 +37,32 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setClearColor(0x000000, 1);
-renderer.setPixelRatio(1);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(38, 1, 0.02, 200);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
 camera.position.set(0, 0.18, 5.2);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
-controls.minDistance = 2.2;
+controls.minDistance = 2.8;
 controls.maxDistance = 9;
-controls.target.set(0, 0, 0);
 
 const rig = new THREE.Group();
 scene.add(rig);
 
-const ambient = new THREE.AmbientLight(0xffffff, 1.35);
-const hemi = new THREE.HemisphereLight(0xffffff, 0x6d7895, 1.1);
+const ambient = new THREE.AmbientLight(0xffffff, 0.78);
 const key = new THREE.DirectionalLight(0xffffff, 1.55);
 key.position.set(3.5, 4.2, 4);
-const fill = new THREE.DirectionalLight(0xffffff, 0.85);
-fill.position.set(-3.4, 1.6, 3.2);
-const rim = new THREE.DirectionalLight(0xa8c7ff, 0.75);
+const rim = new THREE.DirectionalLight(0xa8c7ff, 0.7);
 rim.position.set(-4, 1.8, -2.6);
-scene.add(ambient, hemi, key, fill, rim);
+scene.add(ambient, key, rim);
 
-const modelMaterial = new THREE.MeshStandardMaterial({
+const cleanMaterial = new THREE.MeshStandardMaterial({
   color: new THREE.Color(ui.fg.value),
-  emissive: new THREE.Color(ui.fg.value),
-  emissiveIntensity: 0.18,
-  roughness: 0.62,
-  metalness: 0.04,
+  roughness: 0.5,
+  metalness: 0.06,
   side: THREE.DoubleSide,
 });
 
@@ -141,26 +134,23 @@ const postMaterial = new THREE.ShaderMaterial({
       vec2 matrixUv = (mod(floor(frag / px), 8.0) + 0.5) / 8.0;
       float threshold = texture2D(tBayer, matrixUv).r;
 
-      // Use luminance rather than alpha. This avoids imported models disappearing
-      // when the render target/browser handles alpha differently.
-      float shade = luminance(cleanCell.rgb);
-      shade = clamp((shade - 0.012) * uContrast, 0.0, 1.0);
-      float modelMask = smoothstep(0.006, 0.035, shade);
-      float dither = step(threshold, shade) * modelMask;
-      vec3 dithered = mix(uBg, uFg, dither);
+      float shade = luminance(cleanCell.rgb) * cleanCell.a;
+      shade = clamp((shade - 0.02) * uContrast, 0.0, 1.0);
+      float dither = step(threshold, shade);
 
-      float cleanMask = smoothstep(0.006, 0.045, luminance(cleanFull.rgb));
-      vec3 clean = mix(uBg, cleanFull.rgb, cleanMask);
+      vec3 dithered = mix(uBg, uFg, dither * step(0.01, cleanCell.a));
+      vec3 clean = mix(uBg, cleanFull.rgb, cleanFull.a);
 
       float distToMouse = distance(frag, uMouse);
       float softness = max(1.0, uLensSoftness);
-      float lens = (1.0 - smoothstep(max(0.0, uLensRadius - softness), uLensRadius, distToMouse)) * uLensActive;
+      float lens = (1.0 - smoothstep(uLensRadius - softness, uLensRadius, distToMouse)) * uLensActive;
 
+      // Clean model reveal inside the lens. Dither outside.
       vec3 color = mix(dithered, clean, lens);
 
-      float rimDist = abs(distToMouse - uLensRadius);
-      float ring = (1.0 - smoothstep(0.0, 2.0, rimDist)) * uLensActive;
-      color = mix(color, uFg, ring * 0.32);
+      // Thin optical edge only; it does not dim the lens interior.
+      float ring = smoothstep(uLensRadius + 1.5, uLensRadius, distToMouse) - smoothstep(uLensRadius, uLensRadius - 1.5, distToMouse);
+      color += ring * vec3(0.08) * uLensActive;
 
       gl_FragColor = vec4(color, 1.0);
     }
@@ -171,16 +161,15 @@ postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMaterial));
 init();
 
 function init() {
-  resize();
   loadDemoMesh();
   updateUi();
-
+  resize();
   addEventListener('resize', resize, { passive: true });
   addEventListener('pointermove', setPointer, { passive: true });
   addEventListener('pointerenter', setPointer, { passive: true });
   addEventListener('pointerleave', () => { mouseActive = 0; });
 
-  ui.objFile.addEventListener('change', (event) => loadModelFile(event.target.files?.[0]));
+  ui.objFile.addEventListener('change', (event) => loadOBJFile(event.target.files?.[0]));
   ui.reset.addEventListener('click', loadDemoMesh);
   ui.invert.addEventListener('click', invertColors);
   ui.exportPng.addEventListener('click', exportPNG);
@@ -201,7 +190,7 @@ function init() {
   addEventListener('drop', (event) => {
     event.preventDefault();
     drop.classList.remove('active');
-    loadModelFile(event.dataTransfer?.files?.[0]);
+    loadOBJFile(event.dataTransfer?.files?.[0]);
   });
 
   requestAnimationFrame(animate);
@@ -229,9 +218,8 @@ function makeBayerTexture() {
 
 function setPointer(event) {
   const rect = canvas.getBoundingClientRect();
-  const dpr = renderer.getPixelRatio();
-  mouse.x = (event.clientX - rect.left) * dpr;
-  mouse.y = (rect.height - (event.clientY - rect.top)) * dpr;
+  mouse.x = (event.clientX - rect.left) * renderer.getPixelRatio();
+  mouse.y = (rect.height - (event.clientY - rect.top)) * renderer.getPixelRatio();
   mouseActive = 1;
 }
 
@@ -247,23 +235,19 @@ function resize() {
   camera.aspect = canvasCssW / canvasCssH;
   camera.updateProjectionMatrix();
   postMaterial.uniforms.uResolution.value.set(width, height);
-  updateUi();
 }
 
 function updateUi() {
   const fg = new THREE.Color(ui.fg.value);
   const bg = new THREE.Color(ui.bg.value);
-  const dpr = renderer.getPixelRatio() || 1;
-  postMaterial.uniforms.uPixelSize.value = Math.max(1, Number(ui.pixelSize.value) * dpr);
-  postMaterial.uniforms.uLensRadius.value = Number(ui.lens.value) * dpr;
-  postMaterial.uniforms.uLensSoftness.value = Number(ui.softness.value) * dpr;
+  postMaterial.uniforms.uPixelSize.value = Number(ui.pixelSize.value);
+  postMaterial.uniforms.uLensRadius.value = Number(ui.lens.value) * renderer.getPixelRatio();
+  postMaterial.uniforms.uLensSoftness.value = Number(ui.softness.value) * renderer.getPixelRatio();
   postMaterial.uniforms.uContrast.value = Number(ui.contrast.value) / 100;
   postMaterial.uniforms.uFg.value.copy(fg);
   postMaterial.uniforms.uBg.value.copy(bg);
-  modelMaterial.color.copy(fg);
-  modelMaterial.emissive.copy(fg);
+  cleanMaterial.color.copy(fg);
   key.intensity = Number(ui.light.value) / 100;
-  fill.intensity = Math.max(0.35, Number(ui.light.value) / 180);
   document.documentElement.style.setProperty('--accent', ui.fg.value);
   document.body.style.background = ui.bg.value;
 
@@ -297,7 +281,7 @@ function animate(time) {
 
 function renderFrame(activeRenderer = renderer, activeTarget = renderTarget, resolution = postMaterial.uniforms.uResolution.value, outputTarget = null) {
   activeRenderer.setRenderTarget(activeTarget);
-  activeRenderer.setClearColor(0x000000, 1);
+  activeRenderer.setClearColor(0x000000, 0);
   activeRenderer.clear(true, true, true);
   activeRenderer.render(scene, camera);
 
@@ -307,68 +291,36 @@ function renderFrame(activeRenderer = renderer, activeTarget = renderTarget, res
   activeRenderer.render(postScene, postCamera);
 }
 
-async function loadModelFile(file) {
+function loadOBJFile(file) {
   if (!file) return;
-
-  const ext = fileExtension(file.name);
-  if (!SUPPORTED_EXTENSIONS.has(ext)) {
-    status.textContent = 'Please upload an OBJ, STL, USD, USDA, USDC, or USDZ file.';
+  if (!file.name.toLowerCase().endsWith('.obj')) {
+    status.textContent = 'Please upload a .OBJ file.';
     return;
   }
-
   status.textContent = `Loading ${file.name}…`;
-
-  try {
-    let object;
-    if (ext === 'obj') object = await loadOBJ(file);
-    else if (ext === 'stl') object = await loadSTL(file);
-    else object = await loadUSD(file);
-
-    const report = useObject(object);
-    status.textContent = `Loaded ${file.name}. ${report.meshes} mesh${report.meshes === 1 ? '' : 'es'}, ${report.vertices.toLocaleString()} vertices. Scale ${report.scale.toFixed(4)}.`;
-  } catch (error) {
-    console.error(error);
-    status.textContent = `Could not load ${file.name}. Try exporting as a triangulated OBJ/STL, or a simpler USDZ.`;
-  }
-}
-
-async function loadOBJ(file) {
-  const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
-  const text = await file.text();
-  const cleaned = text
-    .replace(/^\s*mtllib\s+.*$/gmi, '')
-    .replace(/^\s*usemtl\s+.*$/gmi, '');
-  return new OBJLoader().parse(cleaned);
-}
-
-async function loadSTL(file) {
-  const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js');
-  const buffer = await file.arrayBuffer();
-  const geometry = new STLLoader().parse(buffer);
-  geometry.name = file.name;
-  return new THREE.Mesh(geometry, modelMaterial);
-}
-
-async function loadUSD(file) {
-  const { USDLoader } = await import('three/examples/jsm/loaders/USDLoader.js');
-  const url = URL.createObjectURL(file);
-  try {
-    return await new USDLoader().loadAsync(url);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = new OBJLoader().parse(String(reader.result));
+      useObject(parsed);
+      status.textContent = `Loaded ${file.name}.`;
+    } catch (error) {
+      console.error(error);
+      status.textContent = 'Could not parse that OBJ. Try a triangulated / standard OBJ export.';
+    }
+  };
+  reader.onerror = () => { status.textContent = 'Could not read that OBJ file.'; };
+  reader.readAsText(file);
 }
 
 function loadDemoMesh() {
   const group = new THREE.Group();
-  const main = new THREE.Mesh(new THREE.TorusKnotGeometry(0.82, 0.22, 192, 20), modelMaterial);
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 2), modelMaterial);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(1.12, 0.018, 8, 160), modelMaterial);
+  const main = new THREE.Mesh(new THREE.TorusKnotGeometry(0.82, 0.22, 176, 18), cleanMaterial);
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 2), cleanMaterial);
   core.scale.setScalar(0.72);
-  ring.rotation.x = Math.PI * 0.5;
-  group.add(main, core, ring);
-  const report = useObject(group);
-  status.textContent = `Using built-in demo mesh. ${report.meshes} meshes, ${report.vertices.toLocaleString()} vertices. Drag a model file anywhere to replace it.`;
+  group.add(main, core);
+  useObject(group);
+  status.textContent = 'Using built-in demo mesh. Drag an .OBJ anywhere to replace it.';
 }
 
 function useObject(object) {
@@ -377,70 +329,27 @@ function useObject(object) {
     disposeObject(currentRoot);
   }
 
-  let meshes = 0;
-  let vertices = 0;
-
   object.traverse((child) => {
     if (!child.isMesh) return;
-    meshes += 1;
-
-    const geometry = child.geometry;
-    if (!geometry) return;
-
-    // Imported OBJ/STL/USD files often have missing, inverted, or incompatible normals.
-    // Force fresh normals and use a single known-bright material so the post shader
-    // always has luminance to dither.
-    geometry.deleteAttribute?.('normal');
-    geometry.computeVertexNormals?.();
-    geometry.computeBoundingBox?.();
-    geometry.computeBoundingSphere?.();
-
-    vertices += geometry.attributes?.position?.count || 0;
-    child.material = modelMaterial;
+    child.material = cleanMaterial;
     child.castShadow = false;
     child.receiveShadow = false;
-    child.frustumCulled = false;
+    if (child.geometry && !child.geometry.attributes.normal) child.geometry.computeVertexNormals();
   });
 
-  if (!meshes) {
-    throw new Error('No mesh geometry found in file.');
-  }
-
-  const scale = fitToView(object);
+  fitToView(object);
   currentRoot = object;
   rig.add(currentRoot);
-  rig.rotation.set(0, 0, 0);
-  rig.position.set(0, 0, 0);
-  camera.position.set(0, 0.18, 5.2);
-  camera.lookAt(0, 0, 0);
-  controls.target.set(0, 0, 0);
-  controls.update();
-
-  return { meshes, vertices, scale };
 }
 
 function fitToView(object) {
-  object.position.set(0, 0, 0);
-  object.scale.set(1, 1, 1);
-  object.updateWorldMatrix(true, true);
-
+  object.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(object);
-  if (!Number.isFinite(box.min.x) || !Number.isFinite(box.max.x) || box.isEmpty()) {
-    throw new Error('Model has invalid or empty bounds.');
-  }
-
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const scale = 2.45 / maxDim;
-
-  // Important: when scaling the root object, the center translation must be scaled too.
-  // The previous version used -center directly, which pushed off-origin OBJs far outside camera view.
-  object.scale.setScalar(scale);
-  object.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-  object.updateWorldMatrix(true, true);
-
-  return scale;
+  object.position.sub(center);
+  object.scale.setScalar(2.35 / maxDim);
 }
 
 function disposeObject(object) {
@@ -465,7 +374,6 @@ function exportPNG() {
   const prevMouse = mouse.clone();
   const prevLensRadius = postMaterial.uniforms.uLensRadius.value;
   const prevLensSoftness = postMaterial.uniforms.uLensSoftness.value;
-  const prevPixelSize = postMaterial.uniforms.uPixelSize.value;
 
   const scale = 2;
   const exportW = Math.max(1, Math.floor(canvasCssW * scale));
@@ -485,7 +393,6 @@ function exportPNG() {
   postMaterial.uniforms.uResolution.value.set(exportW, exportH);
   postMaterial.uniforms.uLensRadius.value = Number(ui.lens.value) * scale;
   postMaterial.uniforms.uLensSoftness.value = Number(ui.softness.value) * scale;
-  postMaterial.uniforms.uPixelSize.value = Math.max(1, Number(ui.pixelSize.value) * scale);
   mouse.set((prevMouse.x / prevDpr) * scale, (prevMouse.y / prevDpr) * scale);
 
   renderFrame(renderer, renderTarget, postMaterial.uniforms.uResolution.value, finalTarget);
@@ -511,7 +418,7 @@ function exportPNG() {
     if (blob) {
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'model-bayer-dither.png';
+      link.download = 'obj-bayer-dither.png';
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     }
@@ -522,12 +429,7 @@ function exportPNG() {
     postMaterial.uniforms.uResolution.value.copy(prevResolution);
     postMaterial.uniforms.uLensRadius.value = prevLensRadius;
     postMaterial.uniforms.uLensSoftness.value = prevLensSoftness;
-    postMaterial.uniforms.uPixelSize.value = prevPixelSize;
     mouse.copy(prevMouse);
     ui.exportPng.disabled = false;
   }, 'image/png');
-}
-
-function fileExtension(name = '') {
-  return name.split('.').pop()?.toLowerCase() || '';
 }
