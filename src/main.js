@@ -1,6 +1,7 @@
 import './styles.css';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const canvas = document.getElementById('stage');
@@ -31,7 +32,7 @@ let canvasCssH = 1;
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: false,
-  alpha: false,
+  alpha: true,
   powerPreference: 'high-performance',
   preserveDrawingBuffer: false,
 });
@@ -52,17 +53,20 @@ controls.maxDistance = 9;
 const rig = new THREE.Group();
 scene.add(rig);
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.78);
+const ambient = new THREE.AmbientLight(0xffffff, 1.05);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x46506f, 0.8);
 const key = new THREE.DirectionalLight(0xffffff, 1.55);
 key.position.set(3.5, 4.2, 4);
 const rim = new THREE.DirectionalLight(0xa8c7ff, 0.7);
 rim.position.set(-4, 1.8, -2.6);
-scene.add(ambient, key, rim);
+scene.add(ambient, hemi, key, rim);
 
 const cleanMaterial = new THREE.MeshStandardMaterial({
   color: new THREE.Color(ui.fg.value),
-  roughness: 0.5,
-  metalness: 0.06,
+  roughness: 0.58,
+  metalness: 0.02,
+  emissive: new THREE.Color(ui.fg.value),
+  emissiveIntensity: 0.18,
   side: THREE.DoubleSide,
 });
 
@@ -169,7 +173,7 @@ function init() {
   addEventListener('pointerenter', setPointer, { passive: true });
   addEventListener('pointerleave', () => { mouseActive = 0; });
 
-  ui.objFile.addEventListener('change', (event) => loadOBJFile(event.target.files?.[0]));
+  ui.objFile.addEventListener('change', (event) => loadModelFile(event.target.files?.[0]));
   ui.reset.addEventListener('click', loadDemoMesh);
   ui.invert.addEventListener('click', invertColors);
   ui.exportPng.addEventListener('click', exportPNG);
@@ -190,7 +194,7 @@ function init() {
   addEventListener('drop', (event) => {
     event.preventDefault();
     drop.classList.remove('active');
-    loadOBJFile(event.dataTransfer?.files?.[0]);
+    loadModelFile(event.dataTransfer?.files?.[0]);
   });
 
   requestAnimationFrame(animate);
@@ -247,6 +251,7 @@ function updateUi() {
   postMaterial.uniforms.uFg.value.copy(fg);
   postMaterial.uniforms.uBg.value.copy(bg);
   cleanMaterial.color.copy(fg);
+  cleanMaterial.emissive.copy(fg);
   key.intensity = Number(ui.light.value) / 100;
   document.documentElement.style.setProperty('--accent', ui.fg.value);
   document.body.style.background = ui.bg.value;
@@ -291,26 +296,48 @@ function renderFrame(activeRenderer = renderer, activeTarget = renderTarget, res
   activeRenderer.render(postScene, postCamera);
 }
 
-function loadOBJFile(file) {
+function loadModelFile(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.obj')) {
-    status.textContent = 'Please upload a .OBJ file.';
+
+  const name = file.name || 'model';
+  const lower = name.toLowerCase();
+  const isOBJ = lower.endsWith('.obj');
+  const isSTL = lower.endsWith('.stl');
+
+  if (!isOBJ && !isSTL) {
+    status.textContent = 'Please upload a .OBJ or .STL file.';
     return;
   }
-  status.textContent = `Loading ${file.name}…`;
+
+  status.textContent = `Loading ${name}…`;
   const reader = new FileReader();
+
   reader.onload = () => {
     try {
-      const parsed = new OBJLoader().parse(String(reader.result));
+      let parsed;
+
+      if (isOBJ) {
+        parsed = new OBJLoader().parse(String(reader.result));
+      } else {
+        const geometry = new STLLoader().parse(reader.result);
+        parsed = new THREE.Group();
+        parsed.add(new THREE.Mesh(geometry, cleanMaterial));
+      }
+
       useObject(parsed);
-      status.textContent = `Loaded ${file.name}.`;
+      status.textContent = `Loaded ${name}.`;
     } catch (error) {
       console.error(error);
-      status.textContent = 'Could not parse that OBJ. Try a triangulated / standard OBJ export.';
+      status.textContent = isOBJ
+        ? 'Could not parse that OBJ. Try a triangulated / standard OBJ export.'
+        : 'Could not parse that STL. Try exporting as binary or ASCII STL.';
     }
   };
-  reader.onerror = () => { status.textContent = 'Could not read that OBJ file.'; };
-  reader.readAsText(file);
+
+  reader.onerror = () => { status.textContent = `Could not read ${name}.`; };
+
+  if (isOBJ) reader.readAsText(file);
+  else reader.readAsArrayBuffer(file);
 }
 
 function loadDemoMesh() {
@@ -320,7 +347,7 @@ function loadDemoMesh() {
   core.scale.setScalar(0.72);
   group.add(main, core);
   useObject(group);
-  status.textContent = 'Using built-in demo mesh. Drag an .OBJ anywhere to replace it.';
+  status.textContent = 'Using built-in demo mesh. Drag a .OBJ or .STL anywhere to replace it.';
 }
 
 function useObject(object) {
@@ -331,10 +358,19 @@ function useObject(object) {
 
   object.traverse((child) => {
     if (!child.isMesh) return;
+
     child.material = cleanMaterial;
     child.castShadow = false;
     child.receiveShadow = false;
-    if (child.geometry && !child.geometry.attributes.normal) child.geometry.computeVertexNormals();
+
+    if (child.geometry) {
+      // Imported OBJ/STL normals are often missing, inverted, or authored for a different
+      // shading setup. Recompute them so uploaded files do not render as a black silhouette.
+      if (child.geometry.attributes.normal) child.geometry.deleteAttribute('normal');
+      child.geometry.computeVertexNormals();
+      child.geometry.computeBoundingBox();
+      child.geometry.computeBoundingSphere();
+    }
   });
 
   fitToView(object);
